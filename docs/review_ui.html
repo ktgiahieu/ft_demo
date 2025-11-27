@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Surgical Edits Dataset Reviewer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
+        .diff-added { background-color: #dcfce7; color: #166534; }
+        .diff-removed { background-color: #fee2e2; color: #991b1b; }
+        .diff-neutral { background-color: #f3f4f6; }
+        .mechanism-toxic { border-left: 4px solid #ef4444; }
+        .mechanism-omission { border-left: 4px solid #3b82f6; }
+        .note-good { background-color: #dcfce7; }
+        .note-bad { background-color: #fee2e2; }
+        .note-unrealistic { background-color: #fef3c7; }
+        textarea { resize: vertical; }
+        .sticky-header { position: sticky; top: 0; z-index: 10; background: white; border-bottom: 2px solid #e5e7eb; }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+    <div class="w-full max-w-[1800px] mx-auto bg-white shadow-2xl rounded-lg overflow-hidden">
+        <!-- Header -->
+        <div class="sticky-header p-6 border-b">
+            <h1 class="text-3xl font-bold text-gray-800 mb-2">Surgical Edits Dataset Reviewer</h1>
+            <p class="text-gray-600 mb-4">Review and annotate degradation examples side-by-side</p>
+            
+            <!-- Filters and Stats -->
+            <div class="flex flex-wrap items-center gap-4 mb-4">
+                <div class="flex items-center gap-2">
+                    <label class="text-sm font-medium text-gray-700">Filter by Mechanism:</label>
+                    <select id="mechanismFilter" class="border border-gray-300 rounded-md px-3 py-1 text-sm">
+                        <option value="all">All</option>
+                        <option value="TOXIC_INJECTION">TOXIC_INJECTION</option>
+                        <option value="CRITICAL_OMISSION">CRITICAL_OMISSION</option>
+                    </select>
+                </div>
+                <div class="flex items-center gap-2">
+                    <label class="text-sm font-medium text-gray-700">Filter by Rubric:</label>
+                    <select id="rubricFilter" class="border border-gray-300 rounded-md px-3 py-1 text-sm">
+                        <option value="all">All</option>
+                    </select>
+                </div>
+                <div class="ml-auto flex items-center gap-4 text-sm">
+                    <span id="progressText" class="font-medium text-gray-700">Loading...</span>
+                    <button id="saveNotesBtn" class="bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 transition">
+                        💾 Save Notes
+                    </button>
+                    <button id="exportNotesBtn" class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition">
+                        📥 Export JSON
+                    </button>
+                </div>
+            </div>
+            
+            <!-- File Input -->
+            <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-700 mb-2">Load Dataset:</label>
+                <input type="file" id="datasetInput" accept=".json" class="text-sm">
+            </div>
+        </div>
+
+        <!-- Main Content Area -->
+        <div id="mainContent" class="p-6">
+            <div class="text-center text-gray-500 py-12">
+                <p class="text-lg">Please load a dataset file to begin reviewing</p>
+                <p class="text-sm mt-2">Or use the default: ./data/surgical_edits_dataset.json</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let dataset = [];
+        let filteredDataset = [];
+        let notes = {}; // { offer_id: { quality, note, tags } }
+        
+        // Load notes from localStorage or file
+        function loadNotes() {
+            const saved = localStorage.getItem('surgical_edits_notes');
+            if (saved) {
+                try {
+                    notes = JSON.parse(saved);
+                } catch (e) {
+                    console.error('Error loading notes:', e);
+                }
+            }
+        }
+        
+        // Save notes to localStorage
+        function saveNotes() {
+            localStorage.setItem('surgical_edits_notes', JSON.stringify(notes));
+        }
+        
+        // Load dataset
+        async function loadDataset(file) {
+            try {
+                const text = await file.text();
+                dataset = JSON.parse(text);
+                
+                // Populate rubric filter
+                const rubrics = [...new Set(dataset.map(d => d.rubric))].sort();
+                const rubricSelect = document.getElementById('rubricFilter');
+                rubrics.forEach(rubric => {
+                    const option = document.createElement('option');
+                    option.value = rubric;
+                    option.textContent = rubric;
+                    rubricSelect.appendChild(option);
+                });
+                
+                applyFilters();
+            } catch (error) {
+                alert('Error loading dataset: ' + error.message);
+                console.error(error);
+            }
+        }
+        
+        // Apply filters
+        function applyFilters() {
+            const mechanism = document.getElementById('mechanismFilter').value;
+            const rubric = document.getElementById('rubricFilter').value;
+            
+            filteredDataset = dataset.filter(d => {
+                if (mechanism !== 'all' && d.mechanism !== mechanism) return false;
+                if (rubric !== 'all' && d.rubric !== rubric) return false;
+                return true;
+            });
+            
+            renderExamples();
+        }
+        
+        // Render all examples
+        function renderExamples() {
+            const mainContent = document.getElementById('mainContent');
+            const progressText = document.getElementById('progressText');
+            
+            if (filteredDataset.length === 0) {
+                mainContent.innerHTML = '<div class="text-center text-gray-500 py-12">No examples match the current filters</div>';
+                progressText.textContent = '0 / 0 examples';
+                return;
+            }
+            
+            const reviewedCount = filteredDataset.filter(d => notes[d.offer_id]).length;
+            progressText.textContent = `${reviewedCount} / ${filteredDataset.length} reviewed`;
+            
+            mainContent.innerHTML = filteredDataset.map((example, index) => {
+                const note = notes[example.offer_id] || {};
+                const isReviewed = !!notes[example.offer_id];
+                
+                return `
+                    <div class="mb-8 border rounded-lg p-6 ${example.mechanism === 'TOXIC_INJECTION' ? 'mechanism-toxic' : 'mechanism-omission'} ${isReviewed ? 'bg-green-50' : 'bg-white'}" id="example-${index}">
+                        <!-- Example Header -->
+                        <div class="flex items-center justify-between mb-4 pb-4 border-b">
+                            <div>
+                                <div class="flex items-center gap-3">
+                                    <span class="text-2xl font-bold text-gray-800">#${index + 1}</span>
+                                    <span class="px-3 py-1 rounded-full text-xs font-semibold ${example.mechanism === 'TOXIC_INJECTION' ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800'}">
+                                        ${example.mechanism}
+                                    </span>
+                                    <span class="px-3 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-800">
+                                        ${example.rubric}
+                                    </span>
+                                    <span class="text-sm text-gray-600">Offer ID: ${example.offer_id} | ROME: ${example.rome_code}</span>
+                                </div>
+                                ${isReviewed ? '<span class="ml-2 text-xs text-green-600">✓ Reviewed</span>' : ''}
+                            </div>
+                            <button onclick="scrollToNext(${index})" class="text-sm text-blue-600 hover:text-blue-800">
+                                Next →
+                            </button>
+                        </div>
+                        
+                        <!-- Flaw Description -->
+                        <div class="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-md">
+                            <h3 class="font-semibold text-gray-800 mb-2">Flaw Description:</h3>
+                            <p class="text-sm text-gray-700">${escapeHtml(example.flaw_description || 'No description provided')}</p>
+                        </div>
+                        
+                        <!-- Side-by-side Comparison -->
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-4">
+                            <!-- Control (Good) -->
+                            <div class="border rounded-md p-4 bg-green-50">
+                                <h3 class="font-semibold text-green-800 mb-3">✓ Control (Good Offer)</h3>
+                                <div class="bg-white rounded p-3 text-sm max-h-96 overflow-y-auto whitespace-pre-wrap">
+                                    ${formatJobOffer(example.O_control)}
+                                </div>
+                            </div>
+                            
+                            <!-- Treatment (Bad) -->
+                            <div class="border rounded-md p-4 bg-red-50">
+                                <h3 class="font-semibold text-red-800 mb-3">✗ Treatment (Degraded Offer)</h3>
+                                <div class="bg-white rounded p-3 text-sm max-h-96 overflow-y-auto whitespace-pre-wrap">
+                                    ${formatJobOffer(example.O_treatment)}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Differences Highlight (for TOXIC_INJECTION) -->
+                        ${example.mechanism === 'TOXIC_INJECTION' && example.flaw_span ? `
+                            <div class="mb-4 p-4 bg-purple-50 border border-purple-200 rounded-md">
+                                <h3 class="font-semibold text-purple-800 mb-2">Injected Text Location:</h3>
+                                <p class="text-xs text-gray-600">Character span: ${example.flaw_span[0]} - ${example.flaw_span[1]}</p>
+                            </div>
+                        ` : ''}
+                        
+                        <!-- Notes Section -->
+                        <div class="mt-4 pt-4 border-t">
+                            <h3 class="font-semibold text-gray-800 mb-3">Your Review:</h3>
+                            
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input type="radio" name="quality-${index}" value="good" ${note.quality === 'good' ? 'checked' : ''} 
+                                           onchange="updateNote(${index}, 'quality', 'good')" class="w-4 h-4">
+                                    <span class="px-3 py-1 rounded text-sm ${note.quality === 'good' ? 'bg-green-200' : 'bg-gray-100'}">
+                                        ✅ Good/Realistic
+                                    </span>
+                                </label>
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input type="radio" name="quality-${index}" value="bad" ${note.quality === 'bad' ? 'checked' : ''}
+                                           onchange="updateNote(${index}, 'quality', 'bad')" class="w-4 h-4">
+                                    <span class="px-3 py-1 rounded text-sm ${note.quality === 'bad' ? 'bg-red-200' : 'bg-gray-100'}">
+                                        ❌ Bad/Unrealistic
+                                    </span>
+                                </label>
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input type="radio" name="quality-${index}" value="unclear" ${note.quality === 'unclear' ? 'checked' : ''}
+                                           onchange="updateNote(${index}, 'quality', 'unclear')" class="w-4 h-4">
+                                    <span class="px-3 py-1 rounded text-sm ${note.quality === 'unclear' ? 'bg-yellow-200' : 'bg-gray-100'}">
+                                        ❓ Unclear
+                                    </span>
+                                </label>
+                            </div>
+                            
+                            <textarea 
+                                id="note-${index}" 
+                                placeholder="Add your notes here... (e.g., 'Too obvious', 'Subtle and realistic', 'Hard to detect', etc.)"
+                                class="w-full p-3 border border-gray-300 rounded-md text-sm"
+                                rows="3"
+                                onchange="updateNote(${index}, 'note', this.value)"
+                                onkeyup="updateNote(${index}, 'note', this.value)"
+                            >${note.note || ''}</textarea>
+                            
+                            <div class="mt-2 flex flex-wrap gap-2">
+                                <input type="text" 
+                                       id="tags-${index}"
+                                       placeholder="Tags (comma-separated, e.g., 'obvious, unrealistic, subtle')"
+                                       class="flex-1 min-w-64 p-2 border border-gray-300 rounded-md text-sm"
+                                       value="${(note.tags || []).join(', ')}"
+                                       onchange="updateNote(${index}, 'tags', this.value)">
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        // Format job offer for display (show key fields)
+        function formatJobOffer(offer) {
+            const keyFields = [
+                ['dc_intituleoffre', 'Title'],
+                ['dc_descriptifposte', 'Description'],
+                ['dc_commentairesalaire', 'Salary Comments'],
+                ['dn_salaireminimum', 'Min Salary'],
+                ['dc_typecontrat', 'Contract Type'],
+            ];
+            
+            let text = '';
+            keyFields.forEach(([field, label]) => {
+                const value = offer[field];
+                if (value !== null && value !== undefined) {
+                    text += `[${label}]\n${value}\n\n`;
+                }
+            });
+            
+            // Also show other non-null fields
+            Object.keys(offer).forEach(key => {
+                if (!keyFields.some(([f]) => f === key) && offer[key] !== null && offer[key] !== undefined) {
+                    if (typeof offer[key] === 'string' && offer[key].length < 200) {
+                        text += `[${key}]: ${offer[key]}\n`;
+                    }
+                }
+            });
+            
+            return text || 'No content';
+        }
+        
+        // Update note
+        function updateNote(index, field, value) {
+            const example = filteredDataset[index];
+            if (!notes[example.offer_id]) {
+                notes[example.offer_id] = {};
+            }
+            
+            if (field === 'tags') {
+                notes[example.offer_id].tags = value.split(',').map(t => t.trim()).filter(t => t);
+            } else {
+                notes[example.offer_id][field] = value;
+            }
+            
+            notes[example.offer_id].timestamp = new Date().toISOString();
+            notes[example.offer_id].rubric = example.rubric;
+            notes[example.offer_id].mechanism = example.mechanism;
+            
+            saveNotes();
+            
+            // Update reviewed indicator
+            const exampleEl = document.getElementById(`example-${index}`);
+            if (notes[example.offer_id].quality) {
+                exampleEl.classList.add('bg-green-50');
+            }
+            
+            // Update progress
+            const reviewedCount = filteredDataset.filter(d => notes[d.offer_id] && notes[d.offer_id].quality).length;
+            document.getElementById('progressText').textContent = `${reviewedCount} / ${filteredDataset.length} reviewed`;
+        }
+        
+        // Save notes to file
+        function exportNotes() {
+            const exportData = {
+                timestamp: new Date().toISOString(),
+                total_examples: dataset.length,
+                reviewed_count: Object.keys(notes).length,
+                notes: notes
+            };
+            
+            const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `surgical_edits_review_notes_${Date.now()}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+        
+        // Scroll to next unreviewed
+        function scrollToNext(currentIndex) {
+            for (let i = currentIndex + 1; i < filteredDataset.length; i++) {
+                if (!notes[filteredDataset[i].offer_id] || !notes[filteredDataset[i].offer_id].quality) {
+                    document.getElementById(`example-${i}`).scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    return;
+                }
+            }
+            alert('All examples reviewed!');
+        }
+        
+        // Escape HTML
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            loadNotes();
+            
+            // File input
+            document.getElementById('datasetInput').addEventListener('change', (e) => {
+                if (e.target.files.length > 0) {
+                    loadDataset(e.target.files[0]);
+                }
+            });
+            
+            // Filters
+            document.getElementById('mechanismFilter').addEventListener('change', applyFilters);
+            document.getElementById('rubricFilter').addEventListener('change', applyFilters);
+            
+            // Buttons
+            document.getElementById('saveNotesBtn').addEventListener('click', () => {
+                saveNotes();
+                alert('Notes saved to browser storage!');
+            });
+            
+            document.getElementById('exportNotesBtn').addEventListener('click', exportNotes);
+            
+            // Try to load default dataset
+            fetch('./data/surgical_edits_dataset.json')
+                .then(response => {
+                    if (response.ok) {
+                        return response.json();
+                    }
+                    throw new Error('File not found');
+                })
+                .then(data => {
+                    dataset = data;
+                    // Populate rubric filter
+                    const rubrics = [...new Set(dataset.map(d => d.rubric))].sort();
+                    const rubricSelect = document.getElementById('rubricFilter');
+                    rubrics.forEach(rubric => {
+                        const option = document.createElement('option');
+                        option.value = rubric;
+                        option.textContent = rubric;
+                        rubricSelect.appendChild(option);
+                    });
+                    applyFilters();
+                })
+                .catch(error => {
+                    console.log('Default dataset not found, please load manually:', error);
+                });
+        });
+    </script>
+</body>
+</html>
+
