@@ -10,8 +10,8 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
-        .diff-added { background-color: #dcfce7; color: #166534; }
-        .diff-removed { background-color: #fee2e2; color: #991b1b; }
+        .diff-added { background-color: rgba(134, 239, 172, 0.3); color: inherit; padding: 2px 4px; border-radius: 3px; }
+        .diff-removed { background-color: rgba(252, 165, 165, 0.3); color: inherit; padding: 2px 4px; border-radius: 3px; }
         .diff-neutral { background-color: #f3f4f6; }
         .mechanism-toxic { border-left: 4px solid #ef4444; }
         .mechanism-omission { border-left: 4px solid #3b82f6; }
@@ -177,21 +177,11 @@
                             <p class="text-sm text-gray-700">${escapeHtml(example.flaw_description || 'No description provided')}</p>
                         </div>
                         
-                        <!-- Side-by-side Comparison -->
-                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-4">
-                            <!-- Control (Good) -->
-                            <div class="border rounded-md p-4 bg-green-50">
-                                <h3 class="font-semibold text-green-800 mb-3">✓ Control (Good Offer)</h3>
-                                <div class="bg-white rounded p-3 text-sm max-h-96 overflow-y-auto whitespace-pre-wrap">
-                                    ${formatJobOffer(example.O_control)}
-                                </div>
-                            </div>
-                            
-                            <!-- Treatment (Bad) -->
-                            <div class="border rounded-md p-4 bg-red-50">
-                                <h3 class="font-semibold text-red-800 mb-3">✗ Treatment (Degraded Offer)</h3>
-                                <div class="bg-white rounded p-3 text-sm max-h-96 overflow-y-auto whitespace-pre-wrap">
-                                    ${formatJobOffer(example.O_treatment)}
+                        <!-- Differences View (Default) -->
+                        <div class="mb-4">
+                            <div class="border rounded-md p-4 bg-gray-50">
+                                <div class="bg-white rounded p-3 text-sm max-h-[600px] overflow-y-auto">
+                                    ${renderDiffView(example)}
                                 </div>
                             </div>
                         </div>
@@ -255,34 +245,275 @@
             }).join('');
         }
         
-        // Format job offer for display (show key fields)
-        function formatJobOffer(offer) {
-            const keyFields = [
-                ['dc_intituleoffre', 'Title'],
-                ['dc_descriptifposte', 'Description'],
-                ['dc_commentairesalaire', 'Salary Comments'],
-                ['dn_salaireminimum', 'Min Salary'],
-                ['dc_typecontrat', 'Contract Type'],
+        // Field mapping (French labels)
+        const fieldLabels = {
+            'kc_offre': 'Identifiant de l\'offre',
+            'kd_datemodification': 'Date de modification',
+            'dc_etatoffre': 'Etat de l\'offre',
+            'dc_lbletatoffre': 'Label de l\'état de l\'offre',
+            'dc_rome': 'Identifiant du ROME',
+            'dc_lblrome': 'Libellé du ROME',
+            'dc_appellationrome': 'Code de l\'appellation du ROME',
+            'dc_lblappellationrome': 'Libellé de l\'appellation du ROME',
+            'dc_motifetat': 'Code du motif de l\'état',
+            'dc_lblmotifetat': 'Libellé du motif de l\'état',
+            'dc_intituleoffre': 'Intitulé de l\'offre',
+            'dc_descriptifposte': 'Descriptif de l\'offre',
+            'dd_datecreation': 'Date de création',
+            'dc_topoffrepartenaireaom': 'Offre partenaire',
+            'da_listelangues': 'Langues exigées ou souhaitées',
+            'da_listepermis': 'Permis exigés ou souhaités',
+            'dc_typecontrat': 'Code du type de contrat',
+            'dc_lbltypecontrat': 'Type de contrat',
+            'dn_dureecontrat': 'Durée du contrat',
+            'dc_naturecontrat': 'Code de la nature du contrat',
+            'dc_lblnaturecontrat': 'Nature du contrat',
+            'dc_qualification': 'Code de la qualification',
+            'dc_lblqualification': 'Qualification',
+            'dc_typexperienceprof': 'Code du type d\'expérience',
+            'dc_lblexperienceprof': 'Type d\'expérience exigée/souhaitée',
+            'dc_typedureeexperienceprof': 'Code type de durée',
+            'dc_lbltypedureeexperienceprof': 'Type de durée de l\'expérience',
+            'dn_dureeminexperienceprof': 'Durée minimale de l\'expérience professionnelle',
+            'dc_commentaireexperienceprof': 'Commentaire expérience',
+            'dn_salaireminimum': 'Salaire minimum',
+            'dn_salairemaximum': 'Salaire maximum',
+            'dn_nbmoissalaire': 'Nombre de mois de salaire',
+            'dc_commentairesalaire': 'Commentaire salaire',
+            'dc_typesalaire': 'Code type de salaire',
+            'dc_lbltypesalaire': 'Type de salaire',
+            'da_listecomplementsalaire': 'Compléments du salaire',
+            'da_listecompetencessavoir': 'Compétences de type Savoir',
+            'da_listecompetencessavoirfaire': 'Compétences de type Activité / Savoir-faire',
+            'da_listecompetenceslibres': 'Autres compétences libres',
+            'da_listecompetencessavoiretre': 'Savoir-être professionnels',
+            'da_listeformations': 'Formations demandées',
+            'dc_sousclassenaf': 'Code NAF',
+            'dc_lblsousclassenaf': 'Libellé NAF'
+        };
+        
+        // Format a value in a human-friendly way
+        function formatValue(key, value) {
+            if (value === null || value === undefined) return null;
+            
+            // Handle boolean strings
+            if (key === 'dc_topoffrepartenaireaom') {
+                return value === 'true' || value === true ? 'Oui' : 'Non';
+            }
+            
+            // Handle JSON list fields
+            if (key.startsWith('da_liste')) {
+                try {
+                    const parsed = JSON.parse(value);
+                    if (Array.isArray(parsed)) {
+                        return parsed.map(item => {
+                            // Extract the actual value from nested structure
+                            const firstKey = Object.keys(item)[0];
+                            const innerObj = item[firstKey];
+                            if (innerObj && typeof innerObj === 'object') {
+                                // Get the libelle or code value
+                                const libelleKey = Object.keys(innerObj).find(k => k.includes('libelle') || k.includes('Libelle'));
+                                return libelleKey ? innerObj[libelleKey] : JSON.stringify(innerObj);
+                            }
+                            return JSON.stringify(item);
+                        }).join(', ');
+                    }
+                } catch (e) {
+                    // Not JSON, return as is
+                }
+            }
+            
+            // Handle dates
+            if (key.includes('date')) {
+                return String(value);
+            }
+            
+            // Handle numbers
+            if (typeof value === 'number') {
+                return String(value);
+            }
+            
+            return String(value);
+        }
+        
+        // Format entire offer as one big text block (human-friendly)
+        function formatJobOfferFull(offer) {
+            let text = '';
+            
+            // Put description first
+            if (offer.dc_descriptifposte) {
+                text += `${fieldLabels['dc_descriptifposte'] || 'Descriptif de l\'offre'}:\n${offer.dc_descriptifposte}\n\n`;
+            }
+            
+            // Then title
+            if (offer.dc_intituleoffre) {
+                text += `${fieldLabels['dc_intituleoffre'] || 'Intitulé de l\'offre'}: ${offer.dc_intituleoffre}\n\n`;
+            }
+            
+            // Then other fields in a logical order
+            const priorityFields = [
+                'kc_offre', 'dc_rome', 'dc_lblrome', 'dc_appellationrome', 'dc_lblappellationrome',
+                'dc_typecontrat', 'dc_lbltypecontrat', 'dn_dureecontrat', 'dc_naturecontrat', 'dc_lblnaturecontrat',
+                'dc_qualification', 'dc_lblqualification',
+                'dc_typexperienceprof', 'dc_lblexperienceprof', 'dc_typedureeexperienceprof', 
+                'dc_lbltypedureeexperienceprof', 'dn_dureeminexperienceprof', 'dc_commentaireexperienceprof',
+                'dn_salaireminimum', 'dn_salairemaximum', 'dn_nbmoissalaire', 'dc_commentairesalaire',
+                'dc_typesalaire', 'dc_lbltypesalaire', 'da_listecomplementsalaire',
+                'da_listelangues', 'da_listepermis',
+                'da_listecompetencessavoir', 'da_listecompetencessavoirfaire', 
+                'da_listecompetenceslibres', 'da_listecompetencessavoiretre',
+                'da_listeformations',
+                'dc_etatoffre', 'dc_lbletatoffre', 'dc_motifetat', 'dc_lblmotifetat',
+                'dd_datecreation', 'kd_datemodification', 'dc_topoffrepartenaireaom',
+                'dc_sousclassenaf', 'dc_lblsousclassenaf'
             ];
             
-            let text = '';
-            keyFields.forEach(([field, label]) => {
-                const value = offer[field];
-                if (value !== null && value !== undefined) {
-                    text += `[${label}]\n${value}\n\n`;
+            priorityFields.forEach(key => {
+                if (offer[key] !== null && offer[key] !== undefined && key !== 'dc_descriptifposte' && key !== 'dc_intituleoffre') {
+                    const label = fieldLabels[key] || key;
+                    const formattedValue = formatValue(key, offer[key]);
+                    if (formattedValue !== null) {
+                        text += `${label}: ${formattedValue}\n`;
+                    }
                 }
             });
             
-            // Also show other non-null fields
+            // Add any remaining fields not in priority list
             Object.keys(offer).forEach(key => {
-                if (!keyFields.some(([f]) => f === key) && offer[key] !== null && offer[key] !== undefined) {
-                    if (typeof offer[key] === 'string' && offer[key].length < 200) {
-                        text += `[${key}]: ${offer[key]}\n`;
+                if (!priorityFields.includes(key) && offer[key] !== null && offer[key] !== undefined) {
+                    const label = fieldLabels[key] || key;
+                    const formattedValue = formatValue(key, offer[key]);
+                    if (formattedValue !== null) {
+                        text += `${label}: ${formattedValue}\n`;
                     }
                 }
             });
             
             return text || 'No content';
+        }
+        
+        // Word-level diff algorithm (DiffChecker style)
+        function diffWords(oldText, newText) {
+            if (!oldText && !newText) return { oldHtml: '', newHtml: '' };
+            if (!oldText) {
+                return {
+                    oldHtml: '<span class="text-gray-400 italic">(empty)</span>',
+                    newHtml: `<span class="diff-added">${escapeHtml(String(newText))}</span>`
+                };
+            }
+            if (!newText) {
+                return {
+                    oldHtml: `<span class="diff-removed">${escapeHtml(String(oldText))}</span>`,
+                    newHtml: '<span class="text-gray-400 italic">(empty)</span>'
+                };
+            }
+            
+            const oldStr = String(oldText);
+            const newStr = String(newText);
+            
+            // If texts are identical, return as-is
+            if (oldStr === newStr) {
+                return {
+                    oldHtml: escapeHtml(oldStr),
+                    newHtml: escapeHtml(newStr)
+                };
+            }
+            
+            // Split into words (preserving whitespace and punctuation)
+            // Use a regex that splits on word boundaries but keeps the delimiters
+            const oldWords = oldStr.split(/(\s+|[.,;:!?()\[\]{}"'`-])/);
+            const newWords = newStr.split(/(\s+|[.,;:!?()\[\]{}"'`-])/);
+            
+            // Filter out empty strings from split
+            const oldWordsFiltered = oldWords.filter(w => w.length > 0);
+            const newWordsFiltered = newWords.filter(w => w.length > 0);
+            
+            // Compute diff
+            const result = computeWordDiff(oldWordsFiltered, newWordsFiltered);
+            
+            return {
+                oldHtml: result.old.map(part => {
+                    if (part.type === 'removed') {
+                        return `<span class="diff-removed">${escapeHtml(part.text)}</span>`;
+                    } else {
+                        return escapeHtml(part.text);
+                    }
+                }).join(''),
+                newHtml: result.new.map(part => {
+                    if (part.type === 'added') {
+                        return `<span class="diff-added">${escapeHtml(part.text)}</span>`;
+                    } else {
+                        return escapeHtml(part.text);
+                    }
+                }).join('')
+            };
+        }
+        
+        // Compute word-level diff using LCS-like algorithm
+        function computeWordDiff(oldWords, newWords) {
+            // Use dynamic programming to find longest common subsequence
+            const m = oldWords.length;
+            const n = newWords.length;
+            
+            // Build LCS table
+            const dp = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
+            
+            for (let i = 1; i <= m; i++) {
+                for (let j = 1; j <= n; j++) {
+                    if (oldWords[i - 1] === newWords[j - 1]) {
+                        dp[i][j] = dp[i - 1][j - 1] + 1;
+                    } else {
+                        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+                    }
+                }
+            }
+            
+            // Backtrack to find the diff
+            const oldResult = [];
+            const newResult = [];
+            let i = m;
+            let j = n;
+            
+            while (i > 0 || j > 0) {
+                if (i > 0 && j > 0 && oldWords[i - 1] === newWords[j - 1]) {
+                    // Match - add as same
+                    oldResult.unshift({ type: 'same', text: oldWords[i - 1] });
+                    newResult.unshift({ type: 'same', text: newWords[j - 1] });
+                    i--;
+                    j--;
+                } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+                    // Added in new
+                    newResult.unshift({ type: 'added', text: newWords[j - 1] });
+                    j--;
+                } else if (i > 0) {
+                    // Removed from old
+                    oldResult.unshift({ type: 'removed', text: oldWords[i - 1] });
+                    i--;
+                }
+            }
+            
+            return { old: oldResult, new: newResult };
+        }
+        
+        // Render diff view (DiffChecker style - simple side-by-side)
+        function renderDiffView(example) {
+            const controlText = formatJobOfferFull(example.O_control);
+            const treatmentText = formatJobOfferFull(example.O_treatment);
+            
+            const wordDiff = diffWords(controlText, treatmentText);
+            
+            return `
+                <div class="grid grid-cols-2 divide-x border rounded-lg overflow-hidden bg-white">
+                    <div class="p-4 bg-white">
+                        <div class="text-xs font-semibold text-gray-600 mb-2">Control (Original)</div>
+                        <div class="text-sm whitespace-pre-wrap leading-relaxed">${wordDiff.oldHtml}</div>
+                    </div>
+                    <div class="p-4 bg-white">
+                        <div class="text-xs font-semibold text-gray-600 mb-2">Treatment (Modified)</div>
+                        <div class="text-sm whitespace-pre-wrap leading-relaxed">${wordDiff.newHtml}</div>
+                    </div>
+                </div>
+            `;
         }
         
         // Update note
