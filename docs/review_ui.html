@@ -378,9 +378,10 @@
                 }
             });
             
-            // Add any remaining fields not in priority list
+            // Add any remaining fields not in priority list (excluding already added fields)
+            const excludedFields = ['dc_descriptifposte', 'dc_intituleoffre'];
             Object.keys(offer).forEach(key => {
-                if (!priorityFields.includes(key) && offer[key] !== null && offer[key] !== undefined) {
+                if (!priorityFields.includes(key) && !excludedFields.includes(key) && offer[key] !== null && offer[key] !== undefined) {
                     const label = fieldLabels[key] || key;
                     const formattedValue = formatValue(key, offer[key]);
                     if (formattedValue !== null) {
